@@ -1,0 +1,92 @@
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: dbmelt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dbmelt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dbmelt_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-dbmelt_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - dbmelt-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbmelt"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:8-alpine
+    container_name: dbmelt-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - dbmelt-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    image: dbmelt-backend:latest
+    container_name: dbmelt-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-dbmelt}:${POSTGRES_PASSWORD:-dbmelt_secret}@postgres:5432/${POSTGRES_DB:-dbmelt_db}
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
+      - UPLOAD_DIR=/app/uploads
+      - MAX_FILE_SIZE=100000000
+    volumes:
+      # Mount source for hot reload
+      - ./backend/app:/app/app:ro
+      - uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - dbmelt-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    image: dbmelt-frontend:latest
+    container_name: dbmelt-frontend
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=http://localhost:8000/api/v1
+    volumes:
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    networks:
+      - dbmelt-network
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  uploads:
+
+networks:
+  dbmelt-network:
+    driver: bridge
